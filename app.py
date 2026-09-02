@@ -12,7 +12,7 @@ WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "https://твій-домен.com")
 # Посилання на CSV-формат (дуже важливо використовувати саме output=csv)
 SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRXoaJQBhXhCpW5p3nvhnJ0hs9718BH2rWbty0D0sNaE9iGg8PMnPamZOA0oI4yxf5jGpptV-FSSyeA/pub?output=csv"
 
-bot = telebot.TeleBot(TELEGRAM_TOKEN)
+bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=False)
 app = Flask(__name__)
 
 # Розклад для понеділка
