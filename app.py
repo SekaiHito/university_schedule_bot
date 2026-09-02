@@ -71,12 +71,11 @@ def get_current_pair(day_of_week):
 
 def fetch_schedule_for_group(group_name, day_index, current_pair):
     try:
-        df = pd.read_csv(SHEET_CSV_URL, header=None)
+        df = get_schedule_df()
         
         group_search = group_name.strip().lower()
         group_col_idx = -1
         
-        # Шукаємо колонку з групою
         for row_idx in range(10):
             for col_idx in range(len(df.columns)):
                 cell_val = str(df.iloc[row_idx, col_idx]).strip().lower()
@@ -104,7 +103,14 @@ def fetch_schedule_for_group(group_name, day_index, current_pair):
         current_day_str = days_map.get(day_index)
         search_pair = pairs_map.get(current_pair)
         
-        # Нормалізація римських цифр
+        # Визначаємо час початку і кінця пари
+        time_str = ""
+        sched = MON_SCHEDULE if day_index == 0 else OTHER_DAYS_SCHEDULE
+        for p in sched:
+            if p["pair"] == current_pair:
+                time_str = f"{p['start']} - {p['end']}"
+                break
+        
         df[pair_col] = df[pair_col].astype(str).str.upper().str.replace('І', 'I').str.replace('В', 'V')
         
         mask = (df[day_col].astype(str).str.capitalize().str.contains(current_day_str, na=False)) & \
@@ -115,7 +121,6 @@ def fetch_schedule_for_group(group_name, day_index, current_pair):
         if current_lessons.empty:
             return f"Наразі для твоєї групи немає пар у розкладі."
             
-        # Витягуємо дані знайдених рядків
         types = current_lessons.iloc[:, type_col].tolist()
         subjects = current_lessons.iloc[:, subject_col].tolist()
         audits = current_lessons.iloc[:, audit_col].tolist()
@@ -124,7 +129,6 @@ def fetch_schedule_for_group(group_name, day_index, current_pair):
         den_subjects, den_audits = [], []
         current_mode = 'num'
         
-        # БЕЗПЕЧНИЙ ЦИКЛ: гарантовано конвертуємо все в текст перед strip()
         for t, s, a in zip(types, subjects, audits):
             t_str = str(t).lower()
             s_str = str(s).strip()
@@ -145,7 +149,6 @@ def fetch_schedule_for_group(group_name, day_index, current_pair):
                 den_subjects.append(s_clean)
                 den_audits.append(a_clean)
 
-        # Функція для красивого оформлення одного блоку
         def format_half_pair(sub_list, aud_list):
             title = sub_list[0] if len(sub_list) > 0 else ""
             sg1_subj = sub_list[1] if len(sub_list) > 1 else ""
@@ -172,7 +175,8 @@ def fetch_schedule_for_group(group_name, day_index, current_pair):
         num_text = format_half_pair(num_subjects, num_audits)
         den_text = format_half_pair(den_subjects, den_audits)
 
-        response = f"📅 <b>{current_day_str}</b> | ⏰ <b>Пара {search_pair}</b>\n\n"
+        # Додаємо час до заголовка
+        response = f"📅 <b>{current_day_str}</b> | ⏰ <b>Пара {search_pair}</b> ({time_str})\n\n"
         
         if num_text == den_text:
             if num_text == "Вільна пара / Вікно":
@@ -193,8 +197,11 @@ def fetch_schedule_for_group(group_name, day_index, current_pair):
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    bot.reply_to(message, "Привіт! Напиши мені свою групу, і я скажу, де у тебе зараз пара (покажу і чисельник, і знаменник). 🎓")
-
+    try:
+        bot.reply_to(message, "Привіт! Напиши мені свою групу, і я скажу, де у тебе зараз пара (покажу і чисельник, і знаменник). 🎓")
+    except Exception as e:
+        # Якщо користувач заблокував бота, просто ігноруємо і виводимо лог
+        print(f"[ERROR] Не вдалося надіслати welcome-повідомлення: {e}")
 @bot.message_handler(func=lambda message: True)
 def handle_text(message):
     try:
@@ -204,42 +211,67 @@ def handle_text(message):
         tz = pytz.timezone('Europe/Kyiv')
         now = datetime.now(tz)
         day_of_week = now.weekday()
+        current_minutes = now.hour * 60 + now.minute
         
+        target_day = day_of_week
+        start_pair = 1
+        context_msg = ""
+        is_mid_day = False
+        
+        # Перевірка на вихідні
         if day_of_week > 4: 
-            bot.reply_to(message, "Сьогодні вихідний! Пар немає. 🎮")
-            return
+            target_day = 0 
+            context_msg = "🏖️ <b>Сьогодні вихідний!</b> Ось розклад на Понеділок:\n\n"
+        else:
+            schedule = MON_SCHEDULE if day_of_week == 0 else OTHER_DAYS_SCHEDULE
+            # Межі навчального дня
+            first_start_h, first_start_m = map(int, schedule[0]["start"].split(":"))
+            first_start_minutes = first_start_h * 60 + first_start_m - 30 
             
-        current_pair = get_current_pair(day_of_week)
-        print(f"[LOG] Визначено поточну пару: {current_pair}")
-        
-        if not current_pair:
-            bot.reply_to(message, "⏳ Зараз навчання ще не почалося, або вже завершилось. Відпочивай!")
-            return
+            last_end_h, last_end_m = map(int, schedule[-1]["end"].split(":"))
+            last_end_minutes = last_end_h * 60 + last_end_m
             
-        # 1. Отримуємо дані для поточної пари
-        current_answer = fetch_schedule_for_group(group_name, day_of_week, current_pair)
+            # Аналізуємо, в якій частині дня ми знаходимося
+            if current_minutes < first_start_minutes:
+                context_msg = "🌅 <b>Навчання ще не почалося!</b> Ось твій розклад на сьогодні:\n\n"
+            elif current_minutes > last_end_minutes:
+                target_day = (day_of_week + 1) if day_of_week < 4 else 0
+                days_names = {0: "Понеділок", 1: "Вівторок", 2: "Середу", 3: "Четвер", 4: "П'ятницю"}
+                context_msg = f"🌙 <b>Пари вже закінчились!</b> Ось розклад на {days_names[target_day]}:\n\n"
+            else:
+                is_mid_day = True
+                curr_p = get_current_pair(day_of_week)
+                start_pair = curr_p if curr_p else 1
         
-        # Якщо група написана з помилкою, одразу повертаємо текст помилки
-        if "❌" in current_answer or "помилка" in current_answer.lower():
-            bot.reply_to(message, current_answer, parse_mode="HTML")
+        # Збираємо всі пари масивом від поточної до кінця дня
+        pairs_responses = []
+        for p_num in range(start_pair, 6):
+            ans = fetch_schedule_for_group(group_name, target_day, p_num)
+            if "❌" in ans or "помилка" in ans.lower():
+                bot.reply_to(message, ans, parse_mode="HTML")
+                return
+            pairs_responses.append((p_num, ans))
+            
+        # Обрізаємо пусті пари в кінці дня (щоб бот не спамив "Пара 4: немає, Пара 5: немає")
+        while pairs_responses and "немає пар" in pairs_responses[-1][1]:
+            pairs_responses.pop()
+            
+        if not pairs_responses:
+            bot.reply_to(message, context_msg + "🎉 У цей день пар немає (або вільно)!", parse_mode="HTML")
             return
 
-        final_message = f"🎯 <b>ЗАРАЗ:</b>\n{current_answer}"
+        final_message = context_msg
         
-        # 2. Шукаємо наступну пару (максимум пар за розкладом - 5)
-        next_pair = current_pair + 1
-        if next_pair <= 5: 
-            next_answer = fetch_schedule_for_group(group_name, day_of_week, next_pair)
-            
-            # Перевіряємо, чи є наступна пара в розкладі
-            if "Наразі для твоєї групи немає пар" in next_answer:
-                final_message += "\n\n──────────────────\n🚀 <b>НАСТУПНА ПАРА:</b>\n🎉 Далі пар немає (або вікно)!"
+        # Форматуємо видачу
+        for i, (p_num, ans) in enumerate(pairs_responses):
+            if is_mid_day and i == 0:
+                final_message += f"🎯 <b>ПОТОЧНА ПАРА:</b>\n{ans}\n"
+                if len(pairs_responses) > 1:
+                    final_message += "\n──────────────────\n🚀 <b>НАСТУПНІ ПАРИ:</b>\n\n"
             else:
-                final_message += f"\n\n──────────────────\n🚀 <b>НАСТУПНА ПАРА:</b>\n{next_answer}"
-        else:
-            final_message += "\n\n──────────────────\n🚀 <b>НАСТУПНА ПАРА:</b>\n🎉 Це остання пара на сьогодні!"
+                final_message += f"{ans}\n\n"
             
-        bot.reply_to(message, final_message, parse_mode="HTML")
+        bot.reply_to(message, final_message.strip(), parse_mode="HTML")
         print("[LOG] Відповідь успішно надіслано!")
         
     except Exception as e:
