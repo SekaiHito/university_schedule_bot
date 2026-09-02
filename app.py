@@ -4,7 +4,10 @@ from datetime import datetime
 import pytz
 from flask import Flask, request, abort
 import telebot
+import time
 
+_cached_df = None
+_cache_time = 0
 # --- Налаштування ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "ТВІЙ_ТОКЕН_БОТА")
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "https://твій-домен.com") 
@@ -68,6 +71,14 @@ def get_current_pair(day_of_week):
             return p["pair"]
             
     return None
+
+def get_schedule_df():
+    global _cached_df, _cache_time
+    # Оновлюємо таблицю раз на 10 хвилин (600 секунд)
+    if _cached_df is None or (time.time() - _cache_time) > 600:
+        _cached_df = pd.read_csv(SHEET_CSV_URL, header=None)
+        _cache_time = time.time()
+    return _cached_df.copy()
 
 def fetch_schedule_for_group(group_name, day_index, current_pair):
     try:
